@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { envs } from './config';
-import { Logger } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 
 async function bootstrap() {
@@ -13,11 +13,18 @@ async function bootstrap() {
       options: {
         port: envs.port,
       },
-    }
+    },
   );
-  
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      forbidNonWhitelisted: true,
+      whitelist: true,
+    }),
+  );
+
   await app.listen();
 
-  logger.log(`Orders Microservice is running in http://localhost:${envs.port}`)
+  logger.log(`Orders Microservice is running in http://localhost:${envs.port}`);
 }
 bootstrap();

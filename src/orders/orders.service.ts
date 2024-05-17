@@ -13,15 +13,14 @@ import {
   OrderPaginationDto,
 } from './dto';
 import { NATS_SERVICE } from 'src/config';
-import { firstValueFrom } from 'rxjs';
+import { catchError, firstValueFrom } from 'rxjs';
+import { OrderWithProducts } from './interfaces/order-with-products.interface';
 
 @Injectable()
 export class OrdersService extends PrismaClient implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
 
-  constructor(
-    @Inject(NATS_SERVICE) private readonly client: ClientProxy,
-  ) {
+  constructor(@Inject(NATS_SERVICE) private readonly client: ClientProxy) {
     super();
   }
 
@@ -31,38 +30,30 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
   }
 
   async create(createOrderDto: CreateOrderDto) {
-    // const order = await this.order.create({
-    //   data: createOrderDto,
-    // });
-    // return order;
-
     try {
-      //? Confirmar los ids de los productos
-      const productsIds = createOrderDto.items.map((item) => item.productId);
+      //1 Confirmar los ids de los productos
+      const productIds = createOrderDto.items.map((item) => item.productId);
       const products: any[] = await firstValueFrom(
-        this.client.send({ cmd: 'validate_products' }, productsIds),
+        this.client.send({ cmd: 'validate_products' }, productIds),
       );
 
-      //? 2. Calcular el total de la orden
+      //2. Cálculos de los valores
       const totalAmount = createOrderDto.items.reduce((acc, orderItem) => {
         const price = products.find(
           (product) => product.id === orderItem.productId,
         ).price;
-
         return price * orderItem.quantity;
       }, 0);
 
-      //? 3. Calcular el total de items
       const totalItems = createOrderDto.items.reduce((acc, orderItem) => {
         return acc + orderItem.quantity;
       }, 0);
 
-      //? 4. Crear una transacción de base de datos
+      //3. Crear una transacción de base de datos
       const order = await this.order.create({
         data: {
           totalAmount: totalAmount,
           totalItems: totalItems,
-
           OrderItem: {
             createMany: {
               data: createOrderDto.items.map((orderItem) => ({
@@ -79,8 +70,8 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
           OrderItem: {
             select: {
               price: true,
-              productId: true,
               quantity: true,
+              productId: true,
             },
           },
         },
@@ -97,7 +88,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
     } catch (error) {
       throw new RpcException({
         status: HttpStatus.BAD_REQUEST,
-        message: 'Check Logs',
+        message: 'Check logs',
       });
     }
   }
@@ -156,13 +147,14 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
       this.client.send({ cmd: 'validate_products' }, productsIds),
     );
 
-    return { ...order,
-      OrderItem: order.OrderItem.map(orderItem => ({
+    return {
+      ...order,
+      OrderItem: order.OrderItem.map((orderItem) => ({
         ...orderItem,
         name: products.find((product) => product.id === orderItem.productId)
-            .name,
-      }))
-     };
+          .name,
+      })),
+    };
   }
 
   async changeStatus(changeOrderStatusDto: ChangeOrderStatusDto) {
@@ -178,5 +170,22 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
       where: { id },
       data: { status },
     });
+  }
+
+  async createPaymentSession(order: OrderWithProducts) {
+    // console.log(order)
+    const paymentSession = await firstValueFrom(
+      this.client.send('create.payment.session', {
+        orderId: order.id,
+        currency: 'usd',
+        items: order.OrderItem.map(item => ({
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity
+        }))
+      }),
+    );
+
+    return paymentSession;
   }
 }
